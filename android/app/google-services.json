@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "652401234662",
+    "project_id": "campus-sports-labib-2026",
+    "storage_bucket": "campus-sports-labib-2026.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:652401234662:android:f720fdb785e16cb8c1a127",
+        "android_client_info": {
+          "package_name": "com.example.campus_sports_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDbRevdQwhvtpQKzg2FDhdGqkA6tXfJ3gs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
