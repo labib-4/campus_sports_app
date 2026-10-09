@@ -7,6 +7,7 @@ import 'package:latlong2/latlong.dart';
 import '../models/event_model.dart';
 import '../services/auth_service.dart';
 import '../services/event_service.dart';
+import '../widgets/event_card_interactions.dart';
 import '../widgets/youtube_player_widget.dart';
 import 'create_event_screen.dart';
 
@@ -31,47 +32,24 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _searchQuery = '';
   String _selectedCategory = 'All';
-  final ScrollController _feedScrollController = ScrollController();
   final List<EventModel> _events = [];
+  List<DocumentSnapshot?> _pageDocumentHistory = [null];
+  int _currentPage = 1;
   bool _isLoadingEvents = false;
-  bool _hasMoreEvents = true;
   Object? _eventLoadError;
-  DocumentSnapshot? _lastEventDocument;
   final EventService _eventService = EventService();
-  final Map<String, bool> _likeOverrides = {};
-  final Map<String, bool> _dislikeOverrides = {};
-  final Set<String> _pendingReactions = {};
-  final Map<String, double?> _ratingOverrides = {};
-  final Set<String> _pendingRatings = {};
 
   @override
   void initState() {
     super.initState();
-    _feedScrollController.addListener(_onFeedScroll);
-    _loadMoreEvents();
+    _loadPage(pageNumber: 1, startAfterDocument: null);
   }
 
-  @override
-  void dispose() {
-    _feedScrollController
-      ..removeListener(_onFeedScroll)
-      ..dispose();
-    super.dispose();
-  }
-
-  void _onFeedScroll() {
-    if (!_feedScrollController.hasClients ||
-        _isLoadingEvents ||
-        !_hasMoreEvents) {
-      return;
-    }
-    if (_feedScrollController.position.extentAfter < 320) {
-      _loadMoreEvents();
-    }
-  }
-
-  Future<void> _loadMoreEvents() async {
-    if (_isLoadingEvents || !_hasMoreEvents) return;
+  Future<void> _loadPage({
+    required int pageNumber,
+    required DocumentSnapshot? startAfterDocument,
+  }) async {
+    if (_isLoadingEvents) return;
     setState(() {
       _isLoadingEvents = true;
       _eventLoadError = null;
@@ -79,16 +57,23 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       final page = await _eventService.getPaginatedEvents(
-        startAfterDocument: _lastEventDocument,
+        startAfterDocument: startAfterDocument,
         limit: _eventPageSize,
       );
       if (!mounted) return;
       setState(() {
-        _events.addAll(page);
-        if (page.isNotEmpty) {
-          _lastEventDocument = page.last.documentSnapshot;
+        _events
+          ..clear()
+          ..addAll(page);
+        _currentPage = pageNumber;
+
+        _pageDocumentHistory = _pageDocumentHistory.take(pageNumber).toList();
+        if (page.length == _eventPageSize) {
+          final nextPageDocument = page.last.documentSnapshot;
+          if (nextPageDocument != null) {
+            _pageDocumentHistory.add(nextPageDocument);
+          }
         }
-        _hasMoreEvents = page.length == _eventPageSize;
       });
     } catch (error) {
       if (mounted) setState(() => _eventLoadError = error);
@@ -97,16 +82,21 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  int _displayedReactionCount(
-    List<String> reactions,
-    Map<String, bool> overrides,
-    String eventId,
-    String userId,
-  ) {
-    final baseline = reactions.contains(userId);
-    final override = overrides[eventId];
-    if (override == null || override == baseline) return reactions.length;
-    return reactions.length + (override ? 1 : -1);
+  Future<void> _goToPreviousPage() async {
+    if (_currentPage <= 1 || _isLoadingEvents) return;
+    await _loadPage(
+      pageNumber: _currentPage - 1,
+      startAfterDocument: _pageDocumentHistory[_currentPage - 2],
+    );
+  }
+
+  Future<void> _goToNextPage() async {
+    if (_isLoadingEvents || _events.length < _eventPageSize) return;
+    final nextPageNumber = _currentPage + 1;
+    await _loadPage(
+      pageNumber: nextPageNumber,
+      startAfterDocument: _pageDocumentHistory[_currentPage],
+    );
   }
 
   String _formatDateTime(DateTime dateTime) {
@@ -116,125 +106,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final hour = localDate.hour.toString().padLeft(2, '0');
     final minute = localDate.minute.toString().padLeft(2, '0');
     return '$day/$month/${localDate.year} $hour:$minute';
-  }
-
-  Future<void> _toggleLike(
-    EventService eventService,
-    EventModel event,
-    String userId,
-  ) async {
-    if (_pendingReactions.contains(event.id)) return;
-
-    final currentlyLiked =
-        _likeOverrides[event.id] ?? event.likes.contains(userId);
-    setState(() {
-      _likeOverrides[event.id] = !currentlyLiked;
-      _dislikeOverrides[event.id] = false;
-      _pendingReactions.add(event.id);
-    });
-
-    try {
-      await eventService.toggleLike(event.id, userId);
-      await _refreshEvent(event.id);
-    } catch (error) {
-      if (mounted) {
-        setState(() {
-          _likeOverrides.remove(event.id);
-          _dislikeOverrides.remove(event.id);
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not update like: $error')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _pendingReactions.remove(event.id));
-    }
-  }
-
-  Future<void> _toggleDislike(
-    EventService eventService,
-    EventModel event,
-    String userId,
-  ) async {
-    if (_pendingReactions.contains(event.id)) return;
-
-    final currentlyDisliked =
-        _dislikeOverrides[event.id] ?? event.dislikes.contains(userId);
-    setState(() {
-      _dislikeOverrides[event.id] = !currentlyDisliked;
-      _likeOverrides[event.id] = false;
-      _pendingReactions.add(event.id);
-    });
-
-    try {
-      await eventService.toggleDislike(event.id, userId);
-      await _refreshEvent(event.id);
-    } catch (error) {
-      if (mounted) {
-        setState(() {
-          _likeOverrides.remove(event.id);
-          _dislikeOverrides.remove(event.id);
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not update reaction: $error')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _pendingReactions.remove(event.id));
-    }
-  }
-
-  Future<void> _setRating(
-    EventService eventService,
-    EventModel event,
-    String userId,
-    double? rating,
-  ) async {
-    if (_pendingRatings.contains(event.id)) return;
-
-    setState(() {
-      _ratingOverrides[event.id] = rating;
-      _pendingRatings.add(event.id);
-    });
-
-    try {
-      if (rating == null) {
-        await eventService.removeRating(event.id, userId);
-      } else {
-        await eventService.rateEvent(event.id, userId, rating);
-      }
-      await _refreshEvent(event.id);
-    } catch (error) {
-      if (mounted) {
-        setState(() => _ratingOverrides.remove(event.id));
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not update rating: $error')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _pendingRatings.remove(event.id));
-    }
-  }
-
-  EventModel _eventFromSnapshot(DocumentSnapshot snapshot) =>
-      EventModel.fromFirestore(snapshot);
-
-  Future<void> _refreshEvent(String eventId) async {
-    try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('events')
-          .doc(eventId)
-          .get();
-      if (!mounted || !snapshot.exists) return;
-      final updatedEvent = _eventFromSnapshot(snapshot);
-      setState(() {
-        final index = _events.indexWhere((event) => event.id == eventId);
-        if (index != -1) _events[index] = updatedEvent;
-        _likeOverrides.remove(eventId);
-        _dislikeOverrides.remove(eventId);
-        _ratingOverrides.remove(eventId);
-      });
-    } catch (_) {}
   }
 
   void _showCommentsBottomSheet(
@@ -393,15 +264,18 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const CreateEventScreen()),
-          );
-        },
-        icon: const Icon(Icons.add),
-        label: const Text('Create Event'),
+      floatingActionButton: Padding(
+        padding: const EdgeInsets.only(bottom: 60),
+        child: FloatingActionButton.extended(
+          onPressed: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const CreateEventScreen()),
+            );
+          },
+          icon: const Icon(Icons.add),
+          label: const Text('Create Event'),
+        ),
       ),
       body: user == null
           ? const Center(child: Text('No User Found'))
@@ -439,25 +313,6 @@ class _HomeScreenState extends State<HomeScreen> {
                             );
                           }
                           final events = _events;
-                          for (final event in events) {
-                            if (!_pendingRatings.contains(event.id) &&
-                                _ratingOverrides.containsKey(event.id) &&
-                                event.ratings[user.uid] ==
-                                    _ratingOverrides[event.id]) {
-                              final ratingOverride = _ratingOverrides[event.id];
-                              WidgetsBinding.instance.addPostFrameCallback((_) {
-                                if (mounted &&
-                                    !_pendingRatings.contains(event.id) &&
-                                    _ratingOverrides.containsKey(event.id) &&
-                                    _ratingOverrides[event.id] ==
-                                        ratingOverride) {
-                                  setState(
-                                    () => _ratingOverrides.remove(event.id),
-                                  );
-                                }
-                              });
-                            }
-                          }
                           final query = _searchQuery.trim().toLowerCase();
                           final filteredEvents = events.where((event) {
                             final matchesCategory =
@@ -537,105 +392,22 @@ class _HomeScreenState extends State<HomeScreen> {
                                             ),
                                             if (_eventLoadError != null)
                                               TextButton.icon(
-                                                onPressed: _loadMoreEvents,
+                                                onPressed: () => _loadPage(
+                                                  pageNumber: _currentPage,
+                                                  startAfterDocument:
+                                                      _pageDocumentHistory[_currentPage -
+                                                          1],
+                                                ),
                                                 icon: const Icon(Icons.refresh),
                                                 label: const Text('Retry'),
-                                              )
-                                            else if (_hasMoreEvents)
-                                              TextButton(
-                                                onPressed: _loadMoreEvents,
-                                                child: const Text('Load more'),
                                               ),
                                           ],
                                         ),
                                       )
                                     : ListView.builder(
-                                        controller: _feedScrollController,
-                                        itemCount:
-                                            filteredEvents.length +
-                                            (_isLoadingEvents ||
-                                                    _eventLoadError != null ||
-                                                    _hasMoreEvents
-                                                ? 1
-                                                : 0),
+                                        itemCount: filteredEvents.length,
                                         itemBuilder: (context, index) {
-                                          if (index == filteredEvents.length) {
-                                            if (_eventLoadError != null) {
-                                              return Center(
-                                                child: TextButton.icon(
-                                                  onPressed: _loadMoreEvents,
-                                                  icon: const Icon(
-                                                    Icons.refresh,
-                                                  ),
-                                                  label: const Text('Retry'),
-                                                ),
-                                              );
-                                            }
-                                            return _isLoadingEvents
-                                                ? const Padding(
-                                                    padding: EdgeInsets.all(16),
-                                                    child: Center(
-                                                      child: SizedBox(
-                                                        width: 20,
-                                                        height: 20,
-                                                        child:
-                                                            CircularProgressIndicator(
-                                                              strokeWidth: 2,
-                                                            ),
-                                                      ),
-                                                    ),
-                                                  )
-                                                : const SizedBox(height: 48);
-                                          }
                                           final event = filteredEvents[index];
-                                          final isLiked =
-                                              _likeOverrides[event.id] ??
-                                              event.likes.contains(user.uid);
-                                          final isDisliked =
-                                              _dislikeOverrides[event.id] ??
-                                              event.dislikes.contains(user.uid);
-                                          final displayedLikeCount =
-                                              _displayedReactionCount(
-                                                event.likes,
-                                                _likeOverrides,
-                                                event.id,
-                                                user.uid,
-                                              );
-                                          final displayedDislikeCount =
-                                              _displayedReactionCount(
-                                                event.dislikes,
-                                                _dislikeOverrides,
-                                                event.id,
-                                                user.uid,
-                                              );
-                                          final displayedRatings =
-                                              Map<String, double>.from(
-                                                event.ratings,
-                                              );
-                                          if (_ratingOverrides.containsKey(
-                                            event.id,
-                                          )) {
-                                            final override =
-                                                _ratingOverrides[event.id];
-                                            if (override == null) {
-                                              displayedRatings.remove(user.uid);
-                                            } else {
-                                              displayedRatings[user.uid] =
-                                                  override;
-                                            }
-                                          }
-                                          final displayedTotalRatings =
-                                              displayedRatings.length;
-                                          final displayedAverageRating =
-                                              displayedTotalRatings == 0
-                                              ? 0.0
-                                              : displayedRatings.values.reduce(
-                                                      (total, rating) =>
-                                                          total + rating,
-                                                    ) /
-                                                    displayedTotalRatings;
-                                          final currentUserRating =
-                                              displayedRatings[user.uid];
                                           final isExpired = DateTime.now()
                                               .isAfter(
                                                 event.registrationDeadline,
@@ -710,106 +482,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                                       const SizedBox(height: 6),
                                                       Text(event.description),
                                                       const SizedBox(height: 8),
-                                                      Row(
-                                                        children: [
-                                                          const Icon(
-                                                            Icons.star,
-                                                            color: Colors.amber,
-                                                            size: 20,
-                                                          ),
-                                                          const SizedBox(
-                                                            width: 4,
-                                                          ),
-                                                          Text(
-                                                            '${displayedAverageRating.toStringAsFixed(1)} ($displayedTotalRatings ${displayedTotalRatings == 1 ? 'review' : 'reviews'})',
-                                                            style:
-                                                                const TextStyle(
-                                                                  fontWeight:
-                                                                      FontWeight
-                                                                          .w600,
-                                                                ),
-                                                          ),
-                                                        ],
-                                                      ),
-                                                      Wrap(
-                                                        crossAxisAlignment:
-                                                            WrapCrossAlignment
-                                                                .center,
-                                                        children: [
-                                                          for (
-                                                            var star = 1;
-                                                            star <= 5;
-                                                            star++
-                                                          )
-                                                            IconButton(
-                                                              tooltip:
-                                                                  'Rate $star out of 5',
-                                                              visualDensity:
-                                                                  VisualDensity
-                                                                      .compact,
-                                                              padding:
-                                                                  EdgeInsets
-                                                                      .zero,
-                                                              constraints:
-                                                                  const BoxConstraints(
-                                                                    minWidth:
-                                                                        36,
-                                                                    minHeight:
-                                                                        36,
-                                                                  ),
-                                                              onPressed:
-                                                                  _pendingRatings
-                                                                      .contains(
-                                                                        event
-                                                                            .id,
-                                                                      )
-                                                                  ? null
-                                                                  : () => _setRating(
-                                                                      eventService,
-                                                                      event,
-                                                                      user.uid,
-                                                                      star.toDouble(),
-                                                                    ),
-                                                              icon: Icon(
-                                                                currentUserRating !=
-                                                                            null &&
-                                                                        star <=
-                                                                            currentUserRating
-                                                                    ? Icons.star
-                                                                    : Icons
-                                                                          .star_border,
-                                                                color:
-                                                                    currentUserRating !=
-                                                                            null &&
-                                                                        star <=
-                                                                            currentUserRating
-                                                                    ? Colors
-                                                                          .amber
-                                                                    : Colors
-                                                                          .grey,
-                                                              ),
-                                                            ),
-                                                          if (currentUserRating !=
-                                                              null)
-                                                            TextButton(
-                                                              onPressed:
-                                                                  _pendingRatings
-                                                                      .contains(
-                                                                        event
-                                                                            .id,
-                                                                      )
-                                                                  ? null
-                                                                  : () => _setRating(
-                                                                      eventService,
-                                                                      event,
-                                                                      user.uid,
-                                                                      null,
-                                                                    ),
-                                                              child: const Text(
-                                                                'Remove Rating',
-                                                              ),
-                                                            ),
-                                                        ],
+                                                      EventCardInteractions(
+                                                        event: event,
+                                                        userId: user.uid,
+                                                        eventService:
+                                                            eventService,
                                                       ),
                                                       const SizedBox(
                                                         height: 10,
@@ -958,60 +635,6 @@ class _HomeScreenState extends State<HomeScreen> {
                                                       const Divider(),
                                                       Row(
                                                         children: [
-                                                          TextButton.icon(
-                                                            onPressed:
-                                                                _pendingReactions
-                                                                    .contains(
-                                                                      event.id,
-                                                                    )
-                                                                ? null
-                                                                : () => _toggleLike(
-                                                                    eventService,
-                                                                    event,
-                                                                    user.uid,
-                                                                  ),
-                                                            icon: Icon(
-                                                              isLiked
-                                                                  ? Icons
-                                                                        .thumb_up
-                                                                  : Icons
-                                                                        .thumb_up_outlined,
-                                                              color: isLiked
-                                                                  ? Colors.blue
-                                                                  : null,
-                                                            ),
-                                                            label: Text(
-                                                              '$displayedLikeCount',
-                                                            ),
-                                                          ),
-                                                          TextButton.icon(
-                                                            onPressed:
-                                                                _pendingReactions
-                                                                    .contains(
-                                                                      event.id,
-                                                                    )
-                                                                ? null
-                                                                : () => _toggleDislike(
-                                                                    eventService,
-                                                                    event,
-                                                                    user.uid,
-                                                                  ),
-                                                            icon: Icon(
-                                                              isDisliked
-                                                                  ? Icons
-                                                                        .thumb_down
-                                                                  : Icons
-                                                                        .thumb_down_outlined,
-                                                              color: isDisliked
-                                                                  ? Colors
-                                                                        .deepOrange
-                                                                  : null,
-                                                            ),
-                                                            label: Text(
-                                                              '$displayedDislikeCount',
-                                                            ),
-                                                          ),
-                                                          const Spacer(),
                                                           IconButton(
                                                             icon: const Icon(
                                                               Icons
@@ -1034,6 +657,65 @@ class _HomeScreenState extends State<HomeScreen> {
                                           );
                                         },
                                       ),
+                              ),
+                              if (_eventLoadError != null && events.isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 4),
+                                  child: Text(
+                                    'Could not load page: $_eventLoadError',
+                                    style: TextStyle(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .error,
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  12,
+                                  4,
+                                  12,
+                                  8,
+                                ),
+                                child: Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    ElevatedButton(
+                                      onPressed:
+                                          _currentPage == 1 || _isLoadingEvents
+                                          ? null
+                                          : _goToPreviousPage,
+                                      child: const Text('Previous'),
+                                    ),
+                                    Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text('Page $_currentPage'),
+                                        if (_isLoadingEvents) ...[
+                                          const SizedBox(width: 8),
+                                          const SizedBox(
+                                            width: 16,
+                                            height: 16,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                    ElevatedButton(
+                                      onPressed:
+                                          _events.length < _eventPageSize ||
+                                              _isLoadingEvents
+                                          ? null
+                                          : _goToNextPage,
+                                      child: const Text('Next'),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ],
                           );
