@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../models/event_model.dart';
@@ -21,6 +22,10 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
   final _latitudeController = TextEditingController();
   final _longitudeController = TextEditingController();
   final _imagePicker = ImagePicker();
+  late final GenerativeModel _generativeModel = GenerativeModel(
+    model: 'gemini-1.5-flash',
+    apiKey: const String.fromEnvironment('GEMINI_API_KEY'),
+  );
   File? _selectedImage;
   String? _uploadedImageUrl;
   String _selectedCategory = 'Cricket';
@@ -30,6 +35,7 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
   );
   bool _isLoading = false;
   bool _isUploadingImage = false;
+  bool _isGeneratingDescription = false;
 
   final List<String> _categories = [
     'Cricket',
@@ -51,6 +57,55 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
     final hour = localDate.hour.toString().padLeft(2, '0');
     final minute = localDate.minute.toString().padLeft(2, '0');
     return '$day/$month/${localDate.year} at $hour:$minute';
+  }
+
+  Future<void> _generateAIDescription() async {
+    if (_isGeneratingDescription || _isLoading || _isUploadingImage) return;
+
+    const apiKey = String.fromEnvironment('GEMINI_API_KEY');
+    if (apiKey.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Gemini API key is not configured. Set GEMINI_API_KEY at build time.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final title = _titleController.text.trim();
+    if (title.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter an event title first.')),
+      );
+      return;
+    }
+
+    setState(() => _isGeneratingDescription = true);
+    try {
+      final prompt =
+          'Write a catchy, short 2-sentence description for a campus sports '
+          'event titled $title under category $_selectedCategory';
+      final response = await _generativeModel.generateContent([
+        Content.text(prompt),
+      ]);
+      final description = response.text?.trim();
+      if (description == null || description.isEmpty) {
+        throw StateError('Gemini returned an empty description.');
+      }
+      if (mounted) {
+        setState(() => _descController.text = description);
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not generate description: $error')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isGeneratingDescription = false);
+    }
   }
 
   Future<void> _pickDateTime({required bool isDeadline}) async {
@@ -242,7 +297,25 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
               TextFormField(
                 controller: _descController,
                 maxLines: 3,
-                decoration: const InputDecoration(labelText: 'Description'),
+                decoration: InputDecoration(
+                  labelText: 'Description',
+                  suffixIcon: IconButton(
+                    tooltip: 'Generate with AI',
+                    onPressed:
+                        _isGeneratingDescription ||
+                            _isLoading ||
+                            _isUploadingImage
+                        ? null
+                        : _generateAIDescription,
+                    icon: _isGeneratingDescription
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.auto_awesome),
+                  ),
+                ),
                 validator: (val) => val!.isEmpty ? 'Enter description' : null,
               ),
               const SizedBox(height: 12),

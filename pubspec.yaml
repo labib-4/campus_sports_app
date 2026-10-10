@@ -43,6 +43,7 @@ dependencies:
   image_picker: ^1.2.3
   http: ^1.6.0
   cloudinary_public: ^0.21.0
+  google_generative_ai: ^0.4.7
 
 dev_dependencies:
   flutter_test:

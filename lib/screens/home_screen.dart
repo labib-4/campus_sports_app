@@ -7,6 +7,7 @@ import 'package:latlong2/latlong.dart';
 import '../models/event_model.dart';
 import '../services/auth_service.dart';
 import '../services/event_service.dart';
+import '../widgets/ask_ai_chat_sheet.dart';
 import '../widgets/event_card_interactions.dart';
 import '../widgets/youtube_player_widget.dart';
 import 'create_event_screen.dart';
@@ -258,6 +259,16 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('Campus Sports'),
         actions: [
+          IconButton(
+            tooltip: 'Ask AI',
+            icon: const Icon(Icons.auto_awesome),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const AskAiChatSheet()),
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.logout),
             onPressed: () async => await authService.signOut(),
